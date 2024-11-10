@@ -1,19 +1,18 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Form
+from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr, constr
 from typing import Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from core.database import SessionLocal, engine, Base
 from users.models import UserModel
-from core.security import get_password_hash, verify_password, create_access_token
+from core.security import get_password_hash, verify_password
 from core.email import send_verification_email
 from jose import JWTError, jwt
 
+
 # Initialize FastAPI app
 app = FastAPI()
-
-# Create database tables
-Base.metadata.create_all(bind=engine)
 
 # Database dependency
 def get_db():
@@ -23,12 +22,27 @@ def get_db():
     finally:
         db.close()
 
-# User registration request model
+# Define OAuth2 scheme for token-based authentication
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+# Settings for JWT
+SECRET_KEY = "educare_login#234 "
+ALGORITHM = "HS256"
+
+# Function to create access token with expiration
+def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=1)):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + expires_delta
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+# User registration model
 class UserRegistration(BaseModel):
     full_name: str
     email: EmailStr
     institution: str
-    course_level: str
+    course_level: int
     state_of_school: str
     password: str
     confirm_password: str
@@ -72,8 +86,8 @@ async def sign_up(user: UserRegistration, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
-    # Send verification email
-    verification_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(hours=1))
+    # Send verification email with a token that expires in 1 minute
+    verification_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(minutes=1))
     send_verification_email(user.email, verification_token)
 
     return {"message": "Verification email sent. Please check your inbox."}
@@ -89,7 +103,7 @@ async def verify_email(data: EmailVerification, db: Session = Depends(get_db)):
 
     try:
         # Decode and validate token
-        payload = jwt.decode(data.verification_token, "SECRET_KEY", algorithms=["HS256"])
+        payload = jwt.decode(data.verification_token, SECRET_KEY, algorithms=[ALGORITHM])
         token_email = payload.get("sub")
         if token_email != user.email:
             raise HTTPException(status_code=400, detail="Invalid verification token.")
@@ -124,7 +138,7 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, "SECRET_KEY", algorithms=["HS256"])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
@@ -142,4 +156,3 @@ async def user_dashboard(username: str, current_user: UserModel = Depends(get_cu
     if current_user.full_name != username:
         raise HTTPException(status_code=403, detail="Access forbidden.")
     return {"message": f"Welcome to your dashboard, {current_user.full_name}!", "user_data": current_user}
-
